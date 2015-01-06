@@ -387,21 +387,23 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
             Some(id) => id, None => { return }
         };
 
-        let impl_items = tcx.impl_items.borrow();
         let trait_impls = match tcx.trait_impls.borrow().get(&drop_trait).cloned() {
             None => return, // No types with (new-style) dtors present.
             Some(found_impls) => found_impls
         };
 
         for &impl_did in trait_impls.borrow().iter() {
-            let items = &(*impl_items)[impl_did];
-            if items.len() < 1 {
-                // We'll error out later. For now, just don't ICE.
-                continue;
-            }
-            let method_def_id = items[0];
+            let method_def_id = {
+                let items = &tcx.impl_items.borrow()[impl_did];
+                if items.len() < 1 {
+                    // We'll error out later. For now, just don't ICE.
+                    continue;
+                }
+                items[0]
+            };
 
             let self_type = self.get_self_type_for_implementation(impl_did);
+
             match self_type.ty.sty {
                 ty::ty_enum(type_def_id, _) |
                 ty::ty_struct(type_def_id, _) |
@@ -432,6 +434,16 @@ impl<'a, 'tcx> CoherenceChecker<'a, 'tcx> {
                         tcx.sess.bug("found external impl of Drop trait on \
                                       something other than a struct");
                     }
+                }
+            }
+
+            if impl_did.krate == ast::LOCAL_CRATE {
+                let span = tcx.map.span(impl_did.node);
+                let param_env = ParameterEnvironment::for_item(tcx, impl_did.node);
+                if !ty::type_moves_by_default(&param_env, span, self_type.ty) {
+                    span_err!(tcx.sess, span, E0184,
+                              "the `Drop` trait may not be implemented on \
+                               a type that implements `Copy`")
                 }
             }
         }
